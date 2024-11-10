@@ -1,0 +1,127 @@
+# Repository Structure
+
+```
+test-webhook-webflow/
+├── .env.example
+├── .gitignore
+├── README.md
+├── requirements.txt
+├── deployer/
+│   ├── __init__.py
+│   ├── main.py
+│   └── config.py
+```
+
+# File Contents:
+
+## .env.example
+```
+WEBFLOW_TOKEN=05aac6988f86018fa634c82d67e924a862983c59befb2921a146909067a6dc08
+PORKBUN_API_KEY=pk1_85ebe5277f3c8801374cc71313b172e6f337a5e0734ad8386320410342ab7be3
+PORKBUN_SECRET_KEY=sk1_a02636b228130fdc5b174eaa6f10d7ebebec66b68d01851622786efae73c3e2a
+WEBHOOK_SECRET=8f3a9c7d2e5b4f6a1890d2c4e6f8a9b7c5d3e1f0a2b4c6d8e0f2a4b6c8d0e2f
+DEPLOY_DOMAIN=mainemoccasin.com
+WEBHOOK_URL=https://your-server.com/webhook  # We'll update this later
+```
+
+## .gitignore
+```
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+env/
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+*.egg-info/
+.installed.cfg
+*.egg
+
+# Environment variables
+.env
+
+# Virtual Environment
+venv/
+ENV/
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# Logs
+*.log
+```
+
+## requirements.txt
+```
+Flask==2.0.1
+requests==2.26.0
+python-dotenv==0.19.0
+gunicorn==20.1.0
+```
+
+## README.md
+```markdown
+# Webflow to Porkbun Deployer
+
+Automatically deploy Webflow sites to Porkbun hosting when published.
+
+## Setup
+
+1. Clone the repository:
+   ```bash
+   git clone https://github.com/dheselton/test-webhook-webflow.git
+   cd test-webhook-webflow
+   ```
+
+2. Create and activate virtual environment:
+   ```bash
+   python -m venv venv
+   source venv/bin/activate  # On Windows: venv\Scripts\activate
+   ```
+
+3. Install dependencies:
+   ```bash
+   pip install -r requirements.txt
+   ```
+
+4. Copy `.env.example` to `.env` and update the variables:
+   ```bash
+   cp .env.example .env
+   ```
+
+5. Run the application:
+   ```bash
+   python -m deployer.main
+   ```
+
+## Configuration
+
+Update the `.env` file with your credentials:
+- `WEBFLOW_TOKEN`: Your Webflow API token
+- `PORKBUN_API_KEY`: Your Porkbun API key
+- `PORKBUN_SECRET_KEY`: Your Porkbun secret key
+- `WEBHOOK_SECRET`: Secret for webhook verification
+- `DEPLOY_DOMAIN`: Your domain on Porkbun
+- `WEBHOOK_URL`: Public URL where this service will run
+
+## Development
+
+To run locally with hot reload:
+```bash
+flask run --reload
+```
+```
