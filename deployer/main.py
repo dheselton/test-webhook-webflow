@@ -1,81 +1,173 @@
+import os
 import requests
 import zipfile
-import os
-import io
+import json
+from datetime import datetime
+import shutil
+import logging
+from flask import Flask, request, jsonify
+from threading import Thread
 from dotenv import load_dotenv
 
-# Load environment variables from .env file
+# Load environment variables
 load_dotenv()
 
-# Retrieve credentials from environment variables
-WEBFLOW_TOKEN = os.getenv('WEBFLOW_TOKEN')
-WEBFLOW_SITE_ID = os.getenv('WEBFLOW_SITE_ID')  # Add your Webflow Site ID here
-PORKBUN_API_KEY = os.getenv('PORKBUN_API_KEY')
-PORKBUN_SECRET_KEY = os.getenv('PORKBUN_SECRET_KEY')
+# Setup logging
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(levelname)s - %(message)s'
+)
+logger = logging.getLogger(__name__)
 
-# Webflow API endpoint for exporting a site as a ZIP file
-WEBFLOW_EXPORT_URL = f'https://api.webflow.com/sites/{WEBFLOW_SITE_ID}/export'
+app = Flask(__name__)
 
-# Porkbun API endpoint for file uploads
-PORKBUN_UPLOAD_URL = 'https://porkbun.com/api/json/v3/files/upload'
+class WebflowPorkbunDeployer:
+    def __init__(self):
+        self.webflow_token = os.getenv('WEBFLOW_TOKEN')
+        self.porkbun_api_key = os.getenv('PORKBUN_API_KEY')
+        self.porkbun_secret_key = os.getenv('PORKBUN_SECRET_KEY')
+        self.deploy_domain = os.getenv('DEPLOY_DOMAIN')
+        self.webflow_domain = 'maine-mountain-moccasin.webflow.io'
+        self.webflow_api_url = "https://api.webflow.com"
+        self.porkbun_api_url = "https://porkbun.com/api/json/v3"
+        self.logger = logger
 
-def download_webflow_site():
-    """
-    Downloads a ZIP file of the Webflow site using the Webflow API.
-    """
-    headers = {
-        'Authorization': f'Bearer {WEBFLOW_TOKEN}',
-        'Accept-Version': '1.0.0'
-    }
-    response = requests.get(WEBFLOW_EXPORT_URL, headers=headers)
-    response.raise_for_status()
+    def trigger_publish(self, site_id):
+        """Trigger a site publish in Webflow."""
+        headers = {
+            "accept": "application/json",
+            "authorization": f"Bearer {self.webflow_token}",
+            "Content-Type": "application/json"
+        }
+        
+        publish_data = {
+            "domains": [self.webflow_domain]
+        }
+        
+        response = requests.post(
+            f"{self.webflow_api_url}/sites/{site_id}/publish",
+            headers=headers,
+            json=publish_data
+        )
+        
+        if response.status_code != 200:
+            raise Exception(f"Failed to trigger publish: {response.text}")
+            
+        return response.json()
 
-    # Handle ZIP download
-    with zipfile.ZipFile(io.BytesIO(response.content)) as zip_file:
-        zip_file.extractall('webflow_site')  # Extracts ZIP content to webflow_site directory
+    def download_site(self, site_id):
+        """Download site files from Webflow."""
+        headers = {
+            "accept": "application/json",
+            "authorization": f"Bearer {self.webflow_token}"
+        }
+        
+        # First trigger a publish
+        self.logger.info("Triggering site publish...")
+        publish_result = self.trigger_publish(site_id)
+        self.logger.info(f"Publish triggered: {publish_result}")
+        
+        # Download the site files
+        self.logger.info("Downloading site files...")
+        download_response = requests.get(
+            f"{self.webflow_api_url}/sites/{site_id}/export",
+            headers=headers
+        )
+        
+        if download_response.status_code == 200:
+            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+            zip_path = f"webflow_export_{timestamp}.zip"
+            
+            with open(zip_path, 'wb') as f:
+                f.write(download_response.content)
+            
+            # Extract the zip file
+            extract_path = f"webflow_site_{timestamp}"
+            with zipfile.ZipFile(zip_path, 'r') as zip_ref:
+                zip_ref.extractall(extract_path)
+            
+            # Clean up zip file
+            os.remove(zip_path)
+            
+            return extract_path
+        else:
+            raise Exception(f"Failed to download site: {download_response.text}")
 
-    print("Webflow site downloaded and extracted.")
+    def upload_to_porkbun(self, site_path):
+        """Upload files to Porkbun hosting."""
+        files = []
+        for root, dirs, filenames in os.walk(site_path):
+            for filename in filenames:
+                file_path = os.path.join(root, filename)
+                relative_path = os.path.relpath(file_path, site_path)
+                files.append(('files', (relative_path, open(file_path, 'rb'))))
 
-def upload_to_porkbun():
-    """
-    Uploads each file from the downloaded Webflow site to Porkbun hosting.
-    """
-    headers = {
-        'Content-Type': 'application/json'
-    }
-    files_uploaded = 0
+        data = {
+            'apikey': self.porkbun_api_key,
+            'secretapikey': self.porkbun_secret_key,
+            'domain': self.deploy_domain
+        }
 
-    for root, _, files in os.walk('webflow_site'):
-        for file_name in files:
-            file_path = os.path.join(root, file_name)
-            with open(file_path, 'rb') as file_data:
-                # Payload for Porkbun API with authentication and file info
-                payload = {
-                    'apikey': PORKBUN_API_KEY,
-                    'secretapikey': PORKBUN_SECRET_KEY,
-                    'filename': os.path.relpath(file_path, 'webflow_site'),  # Maintain directory structure
-                }
-                files = {
-                    'file': file_data
-                }
-                response = requests.post(PORKBUN_UPLOAD_URL, headers=headers, data=payload, files=files)
-                response.raise_for_status()
+        response = requests.post(
+            f"{self.porkbun_api_url}/hosting/upload",
+            data=data,
+            files=files
+        )
 
-                files_uploaded += 1
-                print(f"Uploaded {file_path} to Porkbun.")
+        # Close all opened files
+        for _, file_tuple in files:
+            file_tuple[1].close()
 
-    print(f"Total files uploaded to Porkbun: {files_uploaded}")
+        if response.status_code == 200:
+            self.logger.info(f"Successfully uploaded files to Porkbun for domain {self.deploy_domain}")
+            return response.json()
+        else:
+            raise Exception(f"Failed to upload to Porkbun: {response.text}")
 
-def main():
-    """
-    Main script function to download and upload the Webflow site.
-    """
+    def handle_webhook(self, site_id):
+        """Handle webhook trigger and deploy site."""
+        try:
+            self.logger.info(f"Starting deployment for site {site_id}")
+            site_path = self.download_site(site_id)
+            self.logger.info(f"Downloaded site to {site_path}")
+            result = self.upload_to_porkbun(site_path)
+            self.logger.info("Upload to Porkbun complete")
+            shutil.rmtree(site_path)
+            return True
+        except Exception as e:
+            self.logger.error(f"Deployment failed: {str(e)}")
+            return False
+
+deployer = WebflowPorkbunDeployer()
+
+@app.route('/webhook', methods=['POST'])
+def webhook():
     try:
-        download_webflow_site()
-        upload_to_porkbun()
-        print("Webflow site successfully transferred to Porkbun.")
+        logger.info("Received webhook request")
+        data = request.get_json(silent=True)
+        logger.info(f"Webhook data: {data}")
+        
+        if data is None:
+            logger.error("No JSON data received")
+            return jsonify({'error': 'No JSON data received'}), 400
+
+        site_id = data.get('payload', {}).get('siteId')
+            
+        if not site_id:
+            logger.error("No site ID found in webhook data")
+            return jsonify({'error': 'No site ID provided'}), 400
+
+        logger.info(f"Processing webhook for site ID: {site_id}")
+        Thread(target=deployer.handle_webhook, args=(site_id,)).start()
+        return jsonify({'message': 'Deployment started'}), 200
+    
     except Exception as e:
-        print(f"An error occurred: {e}")
+        logger.error(f"Error processing webhook: {str(e)}")
+        return jsonify({'error': f'Error processing webhook: {str(e)}'}), 500
+
+@app.route('/health', methods=['GET'])
+def health_check():
+    return jsonify({'status': 'healthy'}), 200
 
 if __name__ == "__main__":
-    main()
+    app.run(host='0.0.0.0', port=5000)
