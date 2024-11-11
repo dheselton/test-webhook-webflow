@@ -40,39 +40,25 @@ class WebflowPorkbunDeployer:
         """Check if a deployment is already in progress for this site."""
         return site_id in self.current_deployments
 
-    def get_site_files(self, site_id):
-        """Get site files using Webflow API."""
-        try:
-            headers = {
-                "accept": "application/json",
-                "authorization": f"Bearer {self.webflow_token}"
-            }
+    def can_publish(self):
+        """Check if enough time has passed since last publish."""
+        with self.publish_lock:
+            if self.last_publish_time is None:
+                return True
+            elapsed = datetime.now() - self.last_publish_time
+            return elapsed > timedelta(seconds=60)
 
-            # Create a timestamp for unique filenames
-            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-            zip_path = f"webflow_export_{timestamp}.zip"
-            extract_path = f"webflow_site_{timestamp}"
-
-            # Download the file directly from the site's URL
-            site_url = f"https://maine-mountain-moccasin.webflow.io"
-            self.logger.info(f"Downloading site from: {site_url}")
-            
-            # Use wget or similar tool to download the site
-            os.system(f'wget -r -k -l inf -p -N -E -H -P {extract_path} {site_url}')
-            
-            return extract_path
-        except Exception as e:
-            raise Exception(f"Failed to get site files: {str(e)}")
+    def update_publish_time(self):
+        """Update the last publish time."""
+        with self.publish_lock:
+            self.last_publish_time = datetime.now()
 
     def trigger_publish(self, site_id):
         """Trigger a site publish in Webflow."""
-        # Wait if last publish was less than 60 seconds ago
-        if self.last_publish_time:
-            elapsed = (datetime.now() - self.last_publish_time).total_seconds()
-            if elapsed < 60:
-                wait_time = 60 - elapsed
-                self.logger.info(f"Waiting {wait_time} seconds before next publish...")
-                time.sleep(wait_time)
+        if not self.can_publish():
+            wait_time = 60
+            self.logger.info(f"Waiting {wait_time} seconds before publishing...")
+            time.sleep(wait_time)
 
         headers = {
             "accept": "application/json",
@@ -98,18 +84,51 @@ class WebflowPorkbunDeployer:
         if response.status_code != 200:
             raise Exception(f"Failed to trigger publish: {response.text}")
         
-        self.last_publish_time = datetime.now()
+        self.update_publish_time()
         return response.json()
+
+    def download_site(self, site_id):
+        """Download site files using wget."""
+        try:
+            # Create a timestamp for unique filenames
+            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+            extract_path = f"webflow_site_{timestamp}"
+
+            # Download the file directly from the site's URL
+            site_url = f"https://{self.webflow_domain}"
+            self.logger.info(f"Downloading site from: {site_url}")
+            
+            # Use wget to download the site
+            os.system(f'wget -r -k -l inf -p -N -E -H -P {extract_path} {site_url}')
+            
+            return extract_path
+        except Exception as e:
+            raise Exception(f"Failed to download site: {str(e)}")
 
     def upload_to_porkbun(self, site_path):
         """Upload files to Porkbun hosting."""
         files = []
         try:
+            self.logger.info("Preparing files for upload...")
+            
+            # Only include HTML, CSS, JS, and image files
+            valid_extensions = ('.html', '.css', '.js', '.jpg', '.jpeg', '.png', '.gif', '.svg', '.ico')
+            
             for root, dirs, filenames in os.walk(site_path):
                 for filename in filenames:
-                    file_path = os.path.join(root, filename)
-                    relative_path = os.path.relpath(file_path, site_path)
-                    if not filename.startswith('.'):  # Skip hidden files
+                    if filename.lower().endswith(valid_extensions):
+                        file_path = os.path.join(root, filename)
+                        relative_path = os.path.relpath(file_path, site_path)
+                        
+                        # Clean up the relative path
+                        if '/maine-mountain-moccasin.webflow.io/' in relative_path:
+                            relative_path = relative_path.split('/maine-mountain-moccasin.webflow.io/')[-1]
+                        
+                        # Ensure the path starts with a /
+                        if not relative_path.startswith('/'):
+                            relative_path = '/' + relative_path
+                        
+                        self.logger.info(f"Adding file: {relative_path}")
                         files.append(('files', (relative_path, open(file_path, 'rb'))))
 
             data = {
@@ -118,9 +137,12 @@ class WebflowPorkbunDeployer:
                 'domain': self.deploy_domain
             }
 
-            self.logger.info(f"Uploading {len(files)} files to Porkbun...")
+            # Use the correct API endpoint
+            upload_url = f"{self.porkbun_api_url}/domain/uploadFiles/{self.deploy_domain}"
+            self.logger.info(f"Uploading {len(files)} files to {upload_url}...")
+
             response = requests.post(
-                f"{self.porkbun_api_url}/hosting/upload",
+                upload_url,
                 data=data,
                 files=files
             )
@@ -129,7 +151,10 @@ class WebflowPorkbunDeployer:
                 self.logger.info(f"Successfully uploaded files to Porkbun for domain {self.deploy_domain}")
                 return response.json()
             else:
+                self.logger.error(f"Upload failed with status {response.status_code}")
+                self.logger.error(f"Response: {response.text}")
                 raise Exception(f"Failed to upload to Porkbun: {response.text}")
+
         finally:
             # Close all opened files
             for _, file_tuple in files:
@@ -158,7 +183,7 @@ class WebflowPorkbunDeployer:
             
             # Get and download the site files
             self.logger.info("Getting site files...")
-            site_path = self.get_site_files(site_id)
+            site_path = self.download_site(site_id)
             self.logger.info(f"Downloaded site to {site_path}")
             
             # Upload to Porkbun
