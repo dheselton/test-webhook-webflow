@@ -17,36 +17,37 @@ def test_webflow_site():
     # Set up headers
     headers = {
         "accept": "application/json",
-        "authorization": f"Bearer {token}"
+        "authorization": f"Bearer {token}",
+        "Content-Type": "application/json"
     }
     
     print("\nTesting connection to Webflow API...")
     
     try:
         # Get site info
-        print("\nGetting site info...")
-        site_response = requests.get(
-            f"https://api.webflow.com/sites/{site_id}",
-            headers=headers
-        )
+        print("\nTesting site info...")
+        info_url = f"https://api.webflow.com/v2/sites/{site_id}"
+        site_response = requests.get(info_url, headers=headers)
+        print(f"Site Info URL: {info_url}")
         print(f"Site Info Status: {site_response.status_code}")
         print(f"Site Info Response: {json.dumps(site_response.json(), indent=2)}")
         
         # Get site domains
-        print("\nGetting site domains...")
-        domains_response = requests.get(
-            f"https://api.webflow.com/sites/{site_id}/domains",
-            headers=headers
-        )
+        print("\nTesting domains...")
+        domains_url = f"https://api.webflow.com/v2/sites/{site_id}/domains"
+        domains_response = requests.get(domains_url, headers=headers)
+        print(f"Domains URL: {domains_url}")
         print(f"Domains Status: {domains_response.status_code}")
         print(f"Domains Response: {json.dumps(domains_response.json(), indent=2)}")
         
         # Test publish endpoint
         print("\nTesting publish endpoint...")
-        publish_response = requests.get(
-            f"https://api.webflow.com/sites/{site_id}/publish",
-            headers=headers
-        )
+        publish_url = f"https://api.webflow.com/v2/sites/{site_id}/publish"
+        publish_data = {
+            "domains": ["all"]
+        }
+        publish_response = requests.post(publish_url, headers=headers, json=publish_data)
+        print(f"Publish URL: {publish_url}")
         print(f"Publish Status: {publish_response.status_code}")
         print(f"Publish Response: {json.dumps(publish_response.json(), indent=2)}")
         
@@ -55,4 +56,3 @@ def test_webflow_site():
 
 if __name__ == "__main__":
     test_webflow_site()
-    python test_site.py
