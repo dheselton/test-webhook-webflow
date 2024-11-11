@@ -8,9 +8,33 @@ import logging
 from flask import Flask, request, jsonify
 from threading import Thread
 from dotenv import load_dotenv
+import sys
 
 # Load environment variables
 load_dotenv()
+
+# Setup logging
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(levelname)s - %(message)s'
+)
+logger = logging.getLogger(__name__)
+
+# Check required environment variables
+required_env_vars = {
+    'WEBFLOW_TOKEN': 'Webflow API token',
+    'PORKBUN_API_KEY': 'Porkbun API key',
+    'PORKBUN_SECRET_KEY': 'Porkbun secret key',
+    'DEPLOY_DOMAIN': 'Domain to deploy to'
+}
+
+missing_vars = [var for var, desc in required_env_vars.items() if not os.getenv(var)]
+
+if missing_vars:
+    logger.error("Missing required environment variables:")
+    for var in missing_vars:
+        logger.error(f"- {var}: {required_env_vars[var]}")
+    sys.exit(1)
 
 app = Flask(__name__)
 
@@ -22,15 +46,12 @@ class WebflowPorkbunDeployer:
         self.deploy_domain = os.getenv('DEPLOY_DOMAIN')
         self.webflow_api_url = "https://api.webflow.com"
         self.porkbun_api_url = "https://porkbun.com/api/json/v3"
-        
-        logging.basicConfig(
-            level=logging.INFO,
-            format='%(asctime)s - %(levelname)s - %(message)s'
-        )
-        self.logger = logging.getLogger(__name__)
-        
-        # Log token info
-        self.logger.info(f"Initialized with token: {self.webflow_token[:10]}...")
+        self.logger = logger
+
+        # Log initialization
+        logger.info("Deployer initialized with:")
+        logger.info(f"- Webflow token: {self.webflow_token[:8]}...")
+        logger.info(f"- Deploy domain: {self.deploy_domain}")
 
     def download_site(self, site_id):
         """Download site files from Webflow."""
@@ -39,7 +60,7 @@ class WebflowPorkbunDeployer:
             "authorization": f"Bearer {self.webflow_token}"
         }
         
-        self.logger.info(f"Making request to Webflow with headers: {headers}")
+        self.logger.info(f"Making request to Webflow API for site: {site_id}")
         
         # First, let's test the token by getting site info
         test_response = requests.get(
@@ -123,7 +144,6 @@ class WebflowPorkbunDeployer:
         """Handle webhook trigger and deploy site."""
         try:
             self.logger.info(f"Received publish trigger for site {site_id}")
-            self.logger.info(f"Using token: {self.webflow_token[:10]}...")
             site_path = self.download_site(site_id)
             result = self.upload_to_porkbun(site_path)
             shutil.rmtree(site_path)
@@ -137,27 +157,27 @@ deployer = WebflowPorkbunDeployer()
 @app.route('/webhook', methods=['POST'])
 def webhook():
     try:
-        deployer.logger.info("Received webhook request")
+        logger.info("Received webhook request")
         
         data = request.get_json(silent=True)
-        deployer.logger.info(f"Body: {data}")
+        logger.info(f"Body: {data}")
         
         if data is None:
-            deployer.logger.error("No JSON data received")
+            logger.error("No JSON data received")
             return jsonify({'error': 'No JSON data received'}), 400
 
         site_id = data.get('payload', {}).get('siteId')
             
         if not site_id:
-            deployer.logger.error("No site ID found in webhook data")
+            logger.error("No site ID found in webhook data")
             return jsonify({'error': 'No site ID provided'}), 400
 
-        deployer.logger.info(f"Processing webhook for site ID: {site_id}")
+        logger.info(f"Processing webhook for site ID: {site_id}")
         Thread(target=deployer.handle_webhook, args=(site_id,)).start()
         return jsonify({'message': 'Deployment started'}), 200
     
     except Exception as e:
-        deployer.logger.error(f"Error processing webhook: {str(e)}")
+        logger.error(f"Error processing webhook: {str(e)}")
         return jsonify({'error': f'Error processing webhook: {str(e)}'}), 500
 
 @app.route('/health', methods=['GET'])
