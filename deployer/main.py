@@ -34,64 +34,46 @@ class WebflowPorkbunDeployer:
         self.logger = logger
         self.last_publish_time = None
         self.publish_lock = Lock()
+        self.current_deployments = set()
 
-    def can_publish(self):
-        """Check if enough time has passed since last publish."""
-        with self.publish_lock:
-            if self.last_publish_time is None:
-                return True
-            
-            # Wait at least 10 seconds between publishes
-            elapsed = datetime.now() - self.last_publish_time
-            return elapsed > timedelta(seconds=10)
-
-    def update_publish_time(self):
-        """Update the last publish time."""
-        with self.publish_lock:
-            self.last_publish_time = datetime.now()
+    def is_already_deploying(self, site_id):
+        """Check if a deployment is already in progress for this site."""
+        return site_id in self.current_deployments
 
     def get_site_files(self, site_id):
-        """Get site files using v2 API."""
-        headers = {
-            "accept": "application/json",
-            "authorization": f"Bearer {self.webflow_token}"
-        }
+        """Get site files using Webflow API."""
+        try:
+            headers = {
+                "accept": "application/json",
+                "authorization": f"Bearer {self.webflow_token}"
+            }
 
-        # Use v2 API to get site files
-        url = f"{self.webflow_api_url}/v2/sites/{site_id}/export"
-        self.logger.info(f"Getting site files from: {url}")
-        
-        response = requests.get(url, headers=headers)
-        
-        if response.status_code == 200:
             # Create a timestamp for unique filenames
             timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
             zip_path = f"webflow_export_{timestamp}.zip"
-            
-            # Save the zip file
-            with open(zip_path, 'wb') as f:
-                f.write(response.content)
-            
-            # Create extraction directory
             extract_path = f"webflow_site_{timestamp}"
+
+            # Download the file directly from the site's URL
+            site_url = f"https://maine-mountain-moccasin.webflow.io"
+            self.logger.info(f"Downloading site from: {site_url}")
             
-            # Extract the zip file
-            with zipfile.ZipFile(zip_path, 'r') as zip_ref:
-                zip_ref.extractall(extract_path)
-            
-            # Clean up zip file
-            os.remove(zip_path)
+            # Use wget or similar tool to download the site
+            os.system(f'wget -r -k -l inf -p -N -E -H -P {extract_path} {site_url}')
             
             return extract_path
-        else:
-            raise Exception(f"Failed to get site files: {response.text}")
+        except Exception as e:
+            raise Exception(f"Failed to get site files: {str(e)}")
 
     def trigger_publish(self, site_id):
         """Trigger a site publish in Webflow."""
-        if not self.can_publish():
-            self.logger.info("Waiting for rate limit...")
-            time.sleep(10)  # Wait 10 seconds
-            
+        # Wait if last publish was less than 60 seconds ago
+        if self.last_publish_time:
+            elapsed = (datetime.now() - self.last_publish_time).total_seconds()
+            if elapsed < 60:
+                wait_time = 60 - elapsed
+                self.logger.info(f"Waiting {wait_time} seconds before next publish...")
+                time.sleep(wait_time)
+
         headers = {
             "accept": "application/json",
             "authorization": f"Bearer {self.webflow_token}",
@@ -108,10 +90,15 @@ class WebflowPorkbunDeployer:
             json=publish_data
         )
         
+        if response.status_code == 429:  # Rate limit
+            self.logger.info("Hit rate limit, waiting 60 seconds...")
+            time.sleep(60)
+            return self.trigger_publish(site_id)
+        
         if response.status_code != 200:
             raise Exception(f"Failed to trigger publish: {response.text}")
         
-        self.update_publish_time()
+        self.last_publish_time = datetime.now()
         return response.json()
 
     def upload_to_porkbun(self, site_path):
@@ -122,7 +109,8 @@ class WebflowPorkbunDeployer:
                 for filename in filenames:
                     file_path = os.path.join(root, filename)
                     relative_path = os.path.relpath(file_path, site_path)
-                    files.append(('files', (relative_path, open(file_path, 'rb'))))
+                    if not filename.startswith('.'):  # Skip hidden files
+                        files.append(('files', (relative_path, open(file_path, 'rb'))))
 
             data = {
                 'apikey': self.porkbun_api_key,
@@ -130,6 +118,7 @@ class WebflowPorkbunDeployer:
                 'domain': self.deploy_domain
             }
 
+            self.logger.info(f"Uploading {len(files)} files to Porkbun...")
             response = requests.post(
                 f"{self.porkbun_api_url}/hosting/upload",
                 data=data,
@@ -144,19 +133,28 @@ class WebflowPorkbunDeployer:
         finally:
             # Close all opened files
             for _, file_tuple in files:
-                file_tuple[1].close()
+                try:
+                    file_tuple[1].close()
+                except:
+                    pass
 
     def handle_webhook(self, site_id):
         """Handle webhook trigger and deploy site."""
+        if self.is_already_deploying(site_id):
+            self.logger.info(f"Deployment already in progress for site {site_id}")
+            return False
+
         try:
+            self.current_deployments.add(site_id)
             self.logger.info(f"Starting deployment for site {site_id}")
             
             # First trigger publish
             self.logger.info("Triggering publish...")
             self.trigger_publish(site_id)
             
-            # Wait a moment for publish to complete
-            time.sleep(5)
+            # Wait for publish to complete
+            self.logger.info("Waiting for publish to complete...")
+            time.sleep(15)
             
             # Get and download the site files
             self.logger.info("Getting site files...")
@@ -174,6 +172,8 @@ class WebflowPorkbunDeployer:
         except Exception as e:
             self.logger.error(f"Deployment failed: {str(e)}")
             return False
+        finally:
+            self.current_deployments.remove(site_id)
 
 deployer = WebflowPorkbunDeployer()
 
@@ -193,6 +193,10 @@ def webhook():
         if not site_id:
             logger.error("No site ID found in webhook data")
             return jsonify({'error': 'No site ID provided'}), 400
+
+        if deployer.is_already_deploying(site_id):
+            logger.info(f"Deployment already in progress for site {site_id}")
+            return jsonify({'message': 'Deployment already in progress'}), 200
 
         logger.info(f"Processing webhook for site ID: {site_id}")
         Thread(target=deployer.handle_webhook, args=(site_id,)).start()
