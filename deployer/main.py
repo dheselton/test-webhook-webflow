@@ -28,6 +28,9 @@ class WebflowPorkbunDeployer:
             format='%(asctime)s - %(levelname)s - %(message)s'
         )
         self.logger = logging.getLogger(__name__)
+        
+        # Log token info
+        self.logger.info(f"Initialized with token: {self.webflow_token[:10]}...")
 
     def download_site(self, site_id):
         """Download site files from Webflow."""
@@ -36,11 +39,26 @@ class WebflowPorkbunDeployer:
             "authorization": f"Bearer {self.webflow_token}"
         }
         
+        self.logger.info(f"Making request to Webflow with headers: {headers}")
+        
+        # First, let's test the token by getting site info
+        test_response = requests.get(
+            f"{self.webflow_api_url}/sites/{site_id}",
+            headers=headers
+        )
+        
+        self.logger.info(f"Test API call response: {test_response.status_code}")
+        self.logger.info(f"Test API response body: {test_response.text}")
+        
         # Trigger site export
+        self.logger.info("Attempting to trigger site export...")
         response = requests.post(
             f"{self.webflow_api_url}/sites/{site_id}/publish",
             headers=headers
         )
+        
+        self.logger.info(f"Publish response code: {response.status_code}")
+        self.logger.info(f"Publish response body: {response.text}")
         
         if response.status_code != 200:
             raise Exception(f"Failed to trigger site export: {response.text}")
@@ -105,6 +123,7 @@ class WebflowPorkbunDeployer:
         """Handle webhook trigger and deploy site."""
         try:
             self.logger.info(f"Received publish trigger for site {site_id}")
+            self.logger.info(f"Using token: {self.webflow_token[:10]}...")
             site_path = self.download_site(site_id)
             result = self.upload_to_porkbun(site_path)
             shutil.rmtree(site_path)
@@ -118,10 +137,8 @@ deployer = WebflowPorkbunDeployer()
 @app.route('/webhook', methods=['POST'])
 def webhook():
     try:
-        # Log the incoming request data
         deployer.logger.info("Received webhook request")
         
-        # Get and log the request body
         data = request.get_json(silent=True)
         deployer.logger.info(f"Body: {data}")
         
@@ -129,7 +146,6 @@ def webhook():
             deployer.logger.error("No JSON data received")
             return jsonify({'error': 'No JSON data received'}), 400
 
-        # Get site ID from the payload structure
         site_id = data.get('payload', {}).get('siteId')
             
         if not site_id:
