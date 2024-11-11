@@ -117,15 +117,36 @@ deployer = WebflowPorkbunDeployer()
 
 @app.route('/webhook', methods=['POST'])
 def webhook():
-    data = request.json
-    site_id = data.get('site_id')
-    
-    if not site_id:
-        return jsonify({'error': 'No site ID provided'}), 400
+    try:
+        # Log the incoming request data
+        deployer.logger.info("Received webhook request")
+        deployer.logger.info(f"Headers: {dict(request.headers)}")
+        
+        # Get and log the request body
+        data = request.get_json(silent=True)
+        deployer.logger.info(f"Body: {data}")
+        
+        if data is None:
+            deployer.logger.error("No JSON data received")
+            return jsonify({'error': 'No JSON data received'}), 400
 
-    Thread(target=deployer.handle_webhook, args=(site_id,)).start()
+        # First try the V2 API format
+        site_id = data.get('site', {}).get('id')
+        
+        # If not found, try V1 API format
+        if not site_id:
+            site_id = data.get('site_id')
+            
+        if not site_id:
+            deployer.logger.error("No site ID found in webhook data")
+            return jsonify({'error': 'No site ID provided'}), 400
+
+        Thread(target=deployer.handle_webhook, args=(site_id,)).start()
+        return jsonify({'message': 'Deployment started'}), 200
     
-    return jsonify({'message': 'Deployment started'}), 200
+    except Exception as e:
+        deployer.logger.error(f"Error processing webhook: {str(e)}")
+        return jsonify({'error': f'Error processing webhook: {str(e)}'}), 500
 
 @app.route('/health', methods=['GET'])
 def health_check():
