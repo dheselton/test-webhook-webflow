@@ -7,8 +7,6 @@ import shutil
 import logging
 from flask import Flask, request, jsonify
 from threading import Thread
-import hmac
-import hashlib
 from dotenv import load_dotenv
 
 # Load environment variables
@@ -21,7 +19,6 @@ class WebflowPorkbunDeployer:
         self.webflow_token = os.getenv('WEBFLOW_TOKEN')
         self.porkbun_api_key = os.getenv('PORKBUN_API_KEY')
         self.porkbun_secret_key = os.getenv('PORKBUN_SECRET_KEY')
-        self.webhook_secret = os.getenv('WEBHOOK_SECRET')
         self.deploy_domain = os.getenv('DEPLOY_DOMAIN')
         self.webflow_api_url = "https://api.webflow.com"
         self.porkbun_api_url = "https://porkbun.com/api/json/v3"
@@ -31,15 +28,6 @@ class WebflowPorkbunDeployer:
             format='%(asctime)s - %(levelname)s - %(message)s'
         )
         self.logger = logging.getLogger(__name__)
-
-    def verify_webhook_signature(self, signature, body):
-        """Verify Webflow webhook signature."""
-        computed_signature = hmac.new(
-            self.webhook_secret.encode(),
-            body,
-            hashlib.sha256
-        ).hexdigest()
-        return hmac.compare_digest(computed_signature, signature)
 
     def download_site(self, site_id):
         """Download site files from Webflow."""
@@ -129,23 +117,12 @@ deployer = WebflowPorkbunDeployer()
 
 @app.route('/webhook', methods=['POST'])
 def webhook():
-    # Verify Webflow webhook signature
-    signature = request.headers.get('X-Webflow-Signature')
-    if not signature:
-        return jsonify({'error': 'No signature provided'}), 401
-
-    # Verify the webhook signature
-    if not deployer.verify_webhook_signature(signature, request.get_data()):
-        return jsonify({'error': 'Invalid signature'}), 401
-
-    # Get site information from the webhook payload
     data = request.json
     site_id = data.get('site_id')
     
     if not site_id:
         return jsonify({'error': 'No site ID provided'}), 400
 
-    # Start deployment in a separate thread
     Thread(target=deployer.handle_webhook, args=(site_id,)).start()
     
     return jsonify({'message': 'Deployment started'}), 200
