@@ -1,12 +1,3 @@
-To integrate the new upload_to_porkbun method with retry logic into your existing WebflowPorkbunDeployer class, replace the current upload_to_porkbun method with the updated version below. Here’s how to make the changes:
-
-	1.	Copy the new method upload_to_porkbun with retry logic.
-	2.	Replace the existing upload_to_porkbun method in your WebflowPorkbunDeployer class.
-
-Updated WebflowPorkbunDeployer Class with upload_to_porkbun Method
-
-Here is the updated class with the new upload_to_porkbun method included:
-
 import os
 import requests
 import zipfile
